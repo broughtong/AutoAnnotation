@@ -11,27 +11,18 @@ import concurrent
 import concurrent.futures
 import multiprocessing
 import tqdm
-from os import devnull
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
-from tf_bag import BagTfTransformer
+import numpy as np
 import laser_geometry.laser_geometry as lg
 import sensor_msgs.point_cloud2 as pc2
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from tf_bag import BagTfTransformer
 from scipy.spatial.transform import Rotation as R
-import numpy as np
 
-extractEveryFrame = False
-gtPath = "../data/gt"
-datasetPath = "../data/rosbags/"
-
-scansPath = "../data/scans"
-pointcloudsPath = "../data/pointclouds"
-dataPath = "../data/meta"
-
-lp = lg.LaserProjection()
+import AutoAnnotation.src.utils.sentinel as sentinel
 
 @contextmanager
 def suppress_stdout_stderr():
-    with open(devnull, 'w') as fnull:
+    with open(os.devnull, 'w') as fnull:
         with redirect_stderr(fnull) as err, redirect_stdout(fnull) as out:
             yield (err, out)
 
@@ -43,6 +34,8 @@ class Extractor():
         self.filename = filename
         self.queue = queue
         self.gtbags = gtBags
+
+        self.lp = lg.LaserProjection()
 
         self.lastX, self.lastY = None, None
         self.distThresh = 2
@@ -77,12 +70,12 @@ class Extractor():
         
         self.queue.put("%s: Process Spawned" % (self.filename))
 
-        self.bagtf = BagTfTransformer(os.path.join(self.path, self.folder, self.filename))
         try:
             with suppress_stdout_stderr():
                 self.bagtf = BagTfTransformer(os.path.join(self.path, self.folder, self.filename))
         except:
-            self.queue.put("%s: Bag failed (1)" % (self.filename))
+            self.queue.put("%s: Bag failed [1]" % (self.filename))
+            self.queue.put(sentinel.PROBLEM)
             return 0
 
         for topic, msg, t in rosbag.Bag(os.path.join(self.path, self.folder, self.filename)).read_messages():
@@ -100,7 +93,7 @@ class Extractor():
                 self.orientation = msg.pose.pose.orientation
 
         self.saveScans()
-        self.queue.put("complete")
+        self.queue.put(sentinel.SUCCESS)
         if len(self.scans) != 0:
             self.queue.put("%s: Finished writing %i frames" % (self.filename, len(self.scans)))
         return len(self.scans)
@@ -134,7 +127,7 @@ class Extractor():
                 return [], [], []
 
         for idx in range(len(msgs)):
-            msgs[idx] = lp.projectLaser(msgs[idx])
+            msgs[idx] = self.lp.projectLaser(msgs[idx])
             msg = pc2.read_points(msgs[idx])
 
             translation, quaternion = None, None
@@ -143,7 +136,7 @@ class Extractor():
                 with suppress_stdout_stderr():
                     translation, quaternion = self.bagtf.lookupTransform("base_link", msgs[idx].header.frame_id, msgs[idx].header.stamp)
             except:
-                self.queue.put("%s: Error finding tf (1) from %s to %s" % (self.filename, msgs[idx].header.frame_id, "base_link"))
+                self.queue.put("%s: Warning, could not find tf from %s to %s [1]" % (self.filename, msgs[idx].header.frame_id, "base_link"))
                 return [], [], []
             r = R.from_quat(quaternion)
             mat = r.as_matrix()
@@ -165,7 +158,7 @@ class Extractor():
             with suppress_stdout_stderr():
                 translation, quaternion = self.bagtf.lookupTransform("odom", "base_link", msgs[0].header.stamp)
         except:
-            self.queue.put("%s: Error finding tf (2) from %s to %s" % (self.filename, "base_link", "odom"))
+            self.queue.put("%s: Warning, could not find tf from %s to %s [2]" % (self.filename, "base_link", "odom"))
             return [], [], []
         r = R.from_quat(quaternion)
         mat = r.as_matrix()
@@ -271,6 +264,7 @@ class Extractor():
                 translation, quaternion = self.bagtf.lookupTransform("base_link", msg.header.frame_id, msg.header.stamp)
         except:
             self.queue.put("%s: Error finding tf (3) from %s to %s" % (self.filename, msg.header.frame_id, "base_link"))
+            self.queue.put("%s: Warning, could not find tf from %s to %s [1]" % (self.filename, msg.header.frame_id, "base_link"))
             return []
 
         r = R.from_quat(quaternion)
@@ -300,14 +294,22 @@ class Extractor():
 
 def listener(q, total):
     pbar = tqdm.tqdm(total=total)
-    for item in iter(q.get, None):
-        if type(item) == int:
+    for item in iter(q.get, sentinel.EXIT):
+        if item == sentinel.SUCCESS or item == sentinel.PROBLEM:
             pbar.update()
         else:
             tqdm.tqdm.write(str(item))
 
 if __name__ == "__main__":
     
+    extractEveryFrame = False
+    gtPath = "../../data/gt"
+    datasetPath = "../../data/rosbags/"
+
+    scansPath = "../../data/scans"
+    pointcloudsPath = "../../data/pointclouds"
+    dataPath = "../../data/meta"
+
     gtBags = []
     for files in os.walk(gtPath):
         for fn in files[2]:
@@ -328,23 +330,24 @@ if __name__ == "__main__":
                 path = datasetPath
                 folder = files[0][len(path):]
                 jobs.append(Extractor(path, folder, filename, queue, gtBags))
+
+    jobs = jobs[:3]
     
     listenProcess = multiprocessing.Process(target=listener, args=(queue, len(jobs)))
     listenProcess.start()
 
-    workers = 3
+    workers = 2
     futures = []
     queue.put("Starting %i jobs with %i workers" % (len(jobs), workers))
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as ex:
         for job in jobs:
             f = ex.submit(job.run)
             futures.append(f)
+            time.sleep(0.1)
 
         for future in futures:
             try:
                 res = future.result()
-                if res is not None:
-                    queue.put(res)
             except Exception as e:
                 queue.put("P Exception: " + str(e))
 
@@ -357,5 +360,5 @@ if __name__ == "__main__":
     with open(os.path.join(dataPath, "statistics.pkl"), "wb") as f:
         pickle.dump(results, f)
     
-    queue.put(None)
+    queue.put(sentinel.EXIT)
     listenProcess.join()

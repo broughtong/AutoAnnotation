@@ -5,6 +5,7 @@ weather_sims/*
 evaluation/results/
 annotations/
 *.bin
+*.json
 *.npy
 *.swp
 *.swo

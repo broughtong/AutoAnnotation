@@ -14,10 +14,7 @@ from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from tf_bag import BagTfTransformer
 from scipy.spatial.transform import Rotation as R
 
-import vehicle_auto_annotation.src.utils.sentinel as sentinel
-
-datasetPath = "../../data/rosbags/"
-outputPath = "../../data/static_tfs/"
+import AutoAnnotation.src.utils.sentinel as sentinel
 
 @contextmanager
 def suppress_stdout_stderr():
@@ -26,12 +23,13 @@ def suppress_stdout_stderr():
             yield (err, out)
 
 class Extractor():
-    def __init__(self, path, folder, filename, queue):
+    def __init__(self, path, folder, filename, queue, outputPath):
 
         self.path = path
         self.folder = folder
         self.filename = filename
         self.queue = queue
+        self.outputPath = outputPath
 
         self.scanTopics = ["sick_back_left", 
                 "sick_back_right", 
@@ -61,6 +59,7 @@ class Extractor():
                     translation, quaternion = self.bagtf.lookupTransform("base_link", i, tftime)
             except:
                 self.queue.put("%s: Warning, could not find tf from %s to %s [2]" % (self.filename, i, "base_link"))
+                continue
 
             r = R.from_quat(quaternion)
             mat = r.as_matrix()
@@ -75,9 +74,9 @@ class Extractor():
             tfs[i]["quaternion"] = quaternion
             tfs[i]["mat"] = mat
 
-        resultFolder = os.path.join(outputPath, self.folder)
+        resultFolder = os.path.join(self.outputPath, self.folder)
         os.makedirs(resultFolder, exist_ok=True)
-        fn = os.path.join(outputPath, self.folder, self.filename + ".pickle")
+        fn = os.path.join(self.outputPath, self.folder, self.filename + ".pickle")
         with open(fn, "wb") as f:
             pickle.dump(tfs, f)
 
@@ -86,15 +85,16 @@ class Extractor():
 
 def listener(q, total):
     pbar = tqdm.tqdm(total=total)
-    for item in iter(q.get):
-        if item == sentinel.EXIT:
-            break
+    for item in iter(q.get, sentinel.EXIT):
         if item == sentinel.SUCCESS or item == sentinel.PROBLEM:
             pbar.update()
         else:
             tqdm.tqdm.write(str(item))
 
 if __name__ == "__main__":
+
+    datasetPath = "../../data/rosbags/"
+    outputPath = "../../data/static_tfs/"
     
     manager = multiprocessing.Manager()
     queue = manager.Queue()
@@ -105,8 +105,8 @@ if __name__ == "__main__":
             if filename[-4:] == ".bag":
                 path = datasetPath
                 folder = files[0][len(path):]
-                jobs.append(Extractor(path, folder, filename, queue))
-    
+                jobs.append(Extractor(path, folder, filename, queue, outputPath))
+
     listenProcess = multiprocessing.Process(target=listener, args=(queue, len(jobs)))
     listenProcess.start()
     
@@ -122,7 +122,6 @@ if __name__ == "__main__":
         for future in futures:
             try:
                 res = future.result()
-                queue.put(res)
             except Exception as e:
                 queue.put("Process exception: " + str(e))
 
