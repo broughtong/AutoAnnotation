@@ -1,0 +1,12 @@
+data/
+visualisation/
+networks/
+weather_sims/*
+evaluation/results/
+annotations/
+*.bin
+*.npy
+*.swp
+*.swo
+*.pyc
+__pycache__/
