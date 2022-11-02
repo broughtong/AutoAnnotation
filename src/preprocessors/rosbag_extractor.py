@@ -27,13 +27,12 @@ def suppress_stdout_stderr():
             yield (err, out)
 
 class Extractor():
-    def __init__(self, path, folder, filename, queue, gtBags):
+    def __init__(self, path, folder, filename, queue):
 
         self.path = path
         self.folder = folder
         self.filename = filename
         self.queue = queue
-        self.gtbags = gtBags
 
         self.lp = lg.LaserProjection()
 
@@ -42,16 +41,8 @@ class Extractor():
         self.fileCounter = 0
         self.position = None
         self.scans = []
-        self.trans = []
+        self.transform = []
         self.ts = []
-
-        self.gtbag = None
-        for i in gtBags:
-            if i[2] == self.filename:
-                self.gtbag = i
-        if self.gtbag:
-            with open(os.path.join(*self.gtbag[:2], self.gtbag[3]), "rb") as f:
-                self.gtbag = pickle.load(f)[0]
 
         self.scanTopics = ["/back_right/sick_safetyscanners/scan", 
                 "/front/sick_safetyscanners/scan",
@@ -65,6 +56,12 @@ class Extractor():
         self.pointcloudScanTopic = ["/os_cloud_node/points"]
         self.pointcloudScanBuf = None
         self.pointclouds = []
+        
+        self.tfFrames = ["sick_back_left", 
+                "sick_back_right", 
+                "sick_back_middle",
+                "sick_front",
+                "os_sensor"]
 
     def run(self):
         
@@ -72,11 +69,14 @@ class Extractor():
 
         try:
             with suppress_stdout_stderr():
+                fn = os.path.join(self.path, self.folder, self.filename)
                 self.bagtf = BagTfTransformer(os.path.join(self.path, self.folder, self.filename))
         except:
             self.queue.put("%s: Bag failed [1]" % (self.filename))
             self.queue.put(sentinel.PROBLEM)
             return 0
+
+        self.extractStaticTFs()
 
         for topic, msg, t in rosbag.Bag(os.path.join(self.path, self.folder, self.filename)).read_messages():
             if topic in self.pointcloudScanTopic:
@@ -98,14 +98,43 @@ class Extractor():
             self.queue.put("%s: Finished writing %i frames" % (self.filename, len(self.scans)))
         return len(self.scans)
 
+    def extractStaticTFs(self):
+
+        self.staticTFs = {}
+
+        for i in self.tfFrames:
+
+            translation, quaternion = None, None
+
+            try:
+                with suppress_stdout_stderr():
+                    tftime = self.bagtf.waitForTransform("base_link", i, None)
+                    translation, quaternion = self.bagtf.lookupTransform("base_link", i, tftime)
+            except:
+                self.queue.put("%s: Warning, could not find static tf from %s to %s [1]" % (self.filename, i, "base_link"))
+                continue
+
+            r = R.from_quat(quaternion)
+            mat = r.as_matrix()
+            mat = np.pad(mat, ((0, 1), (0, 1)), mode='constant', constant_values=0)
+            mat[0][-1] += translation[0]
+            mat[1][-1] += translation[1]
+            mat[2][-1] += translation[2]
+            mat[3][-1] = 1
+
+            self.staticTFs[i] = {}
+            self.staticTFs[i]["translation"] = translation
+            self.staticTFs[i]["quaternion"] = quaternion
+            self.staticTFs[i]["mat"] = mat
+
     def odometryMoved(self):
 
         if self.lastX == None:
             if self.position == None:
-                return
+                return False
             self.lastX = self.position.x
             self.lastY = self.position.y
-            return
+            return True
 
         diffx = self.position.x - self.lastX
         diffy = self.position.y - self.lastY
@@ -136,7 +165,7 @@ class Extractor():
                 with suppress_stdout_stderr():
                     translation, quaternion = self.bagtf.lookupTransform("base_link", msgs[idx].header.frame_id, msgs[idx].header.stamp)
             except:
-                self.queue.put("%s: Warning, could not find tf from %s to %s [1]" % (self.filename, msgs[idx].header.frame_id, "base_link"))
+                self.queue.put("%s: Warning, could not find tf from %s to %s [2]" % (self.filename, msgs[idx].header.frame_id, "base_link"))
                 return [], [], []
             r = R.from_quat(quaternion)
             mat = r.as_matrix()
@@ -158,7 +187,7 @@ class Extractor():
             with suppress_stdout_stderr():
                 translation, quaternion = self.bagtf.lookupTransform("odom", "base_link", msgs[0].header.stamp)
         except:
-            self.queue.put("%s: Warning, could not find tf from %s to %s [2]" % (self.filename, "base_link", "odom"))
+            self.queue.put("%s: Warning, could not find tf from %s to %s [3]" % (self.filename, "base_link", "odom"))
             return [], [], []
         r = R.from_quat(quaternion)
         mat = r.as_matrix()
@@ -168,12 +197,12 @@ class Extractor():
         mat[2][-1] += translation[2]
         mat[3][-1] = 1
 
-        trans = mat 
+        transform = mat 
 
         for key, value in points.items():
             points[key] = self.filterRobot(value)
 
-        return points, trans, t
+        return points, transform, t
 
     def filterRobot(self, points):
 
@@ -209,7 +238,7 @@ class Extractor():
             pickle.dump({"pointclouds": self.pointclouds}, f)
         fn = os.path.join(dataPath, self.folder, self.filename + ".pickle")
         with open(fn, "wb") as f:
-            pickle.dump({"trans": self.trans, "ts": self.ts}, f)
+            pickle.dump({"transform": self.transform, "ts": self.ts, "staticTFs": self.staticTFs}, f)
 
     def processScan(self, msg, t):
 
@@ -221,28 +250,17 @@ class Extractor():
         msgs = copy.deepcopy(self.topicBuf)
         msgs.append(msg)
 
-        if self.gtbag is None:
-            if extractEveryFrame == False:
-                if not self.odometryMoved():# and self.filename not in self.gtBags:
-                    return
-        else:
-            tFound = False
-            for frame in self.gtbag:
-                gttime = rospy.Time(frame[0].secs, frame[0].nsecs)
-                if gttime == t:
-                    tFound = True
-                    break
-            if tFound == False:
-                return
+        if not self.odometryMoved():
+            return
 
-        combined, trans, ts = self.combineScans(msgs, t)
+        combined, transform, ts = self.combineScans(msgs, t)
         if len(combined) == 0:
             return
         for key in combined.keys():
             combined[key] = np.array(combined[key])
             combined[key] = combined[key].reshape(combined[key].shape[0], 4)
         self.scans.append(combined)
-        self.trans.append(trans)
+        self.transform.append(transform)
         self.ts.append(ts)
 
         if self.pointcloudScanBuf is not None:
@@ -263,8 +281,7 @@ class Extractor():
             with suppress_stdout_stderr():
                 translation, quaternion = self.bagtf.lookupTransform("base_link", msg.header.frame_id, msg.header.stamp)
         except:
-            self.queue.put("%s: Error finding tf (3) from %s to %s" % (self.filename, msg.header.frame_id, "base_link"))
-            self.queue.put("%s: Warning, could not find tf from %s to %s [1]" % (self.filename, msg.header.frame_id, "base_link"))
+            self.queue.put("%s: Warning, could not find tf from %s to %s [4]" % (self.filename, msg.header.frame_id, "base_link"))
             return []
 
         r = R.from_quat(quaternion)
@@ -275,18 +292,16 @@ class Extractor():
         mat[2][-1] += translation[2]
         mat[3][-1] = 1
 
-        gen = list(pc2.read_points(msg, skip_nans=True))
-        gen = np.array(gen)
+        points = pc2.read_points(msg, skip_nans=True)
 
         out = []
-        for idx, point in enumerate(gen):
+        for point in points:
             #x, y, z, intensity, t, reflectivity, ring, ambient, range
             transPoint = [*point[:3], 1]
             transPoint = np.matmul(mat, transPoint)
             point = [*transPoint[:3], *point[3:]]
             if (point[0]**2 + point[1]**2)**0.5 < 2.5:
                 continue
-            point = np.array(point)
             out.append(point)
         out = np.array(out) 
 
@@ -302,23 +317,23 @@ def listener(q, total):
 
 if __name__ == "__main__":
     
-    extractEveryFrame = False
-    gtPath = "../../data/gt"
     datasetPath = "../../data/rosbags/"
-
+    """
+    dataTopics = {
+        "scans": [
+            "/back_right/sick_safetyscanners/scan",
+            "/front/sick_safetyscanners/scan",
+            "/back_left/sick_safetyscanners/scan",
+            "/back_middle/scan"
+            ],
+        "pointclouds": [
+            "/os_cloud_node/points"
+            ]
+        }
+    """
     scansPath = "../../data/scans"
     pointcloudsPath = "../../data/pointclouds"
     dataPath = "../../data/meta"
-
-    gtBags = []
-    for files in os.walk(gtPath):
-        for fn in files[2]:
-            if "-lidar.pkl" in fn:
-                origFn = fn
-                fn = fn.split("-")[:-1]
-                fn = "-".join(fn)
-                fn += ".bag"
-                gtBags.append([gtPath, files[0][len(gtPath)+1:], fn, origFn])
 
     manager = multiprocessing.Manager()
     queue = manager.Queue()
@@ -329,14 +344,12 @@ if __name__ == "__main__":
             if filename[-4:] == ".bag":
                 path = datasetPath
                 folder = files[0][len(path):]
-                jobs.append(Extractor(path, folder, filename, queue, gtBags))
+                jobs.append(Extractor(path, folder, filename, queue))
 
-    jobs = jobs[:3]
-    
     listenProcess = multiprocessing.Process(target=listener, args=(queue, len(jobs)))
     listenProcess.start()
 
-    workers = 2
+    workers = 4
     futures = []
     queue.put("Starting %i jobs with %i workers" % (len(jobs), workers))
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as ex:
@@ -349,7 +362,7 @@ if __name__ == "__main__":
             try:
                 res = future.result()
             except Exception as e:
-                queue.put("P Exception: " + str(e))
+                queue.put("Process exception: " + str(e))
 
     results = []
     for i, job in enumerate(jobs):
