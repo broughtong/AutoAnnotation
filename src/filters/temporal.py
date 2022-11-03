@@ -1,7 +1,4 @@
 #!/usr/bin/python
-import shutil
-import copy
-import utils
 import pickle
 import math
 import sys
@@ -11,15 +8,13 @@ import concurrent
 import concurrent.futures
 import multiprocessing
 import tqdm
-from os import devnull
+import numpy as np
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from scipy.spatial.transform import Rotation as R
-import numpy as np
-import matplotlib.pyplot as plt
 
 @contextmanager
 def suppress_stdout_stderr():
-    with open(devnull, 'w') as fnull:
+    with open(os.devnull, 'w') as fnull:
         with redirect_stderr(fnull) as err, redirect_stdout(fnull) as out:
             yield (err, out)
 
@@ -40,10 +35,9 @@ class Temporal():
         self.extrapolateRequired = extrapolateRequired
         self.underRobotDistance = 1.8
         self.data = {}
-        self.outputPath = outputPath + "%s-%s-%s-%s-%s" % (str(self.detectionDistance), str(self.interpolateFrames), str(self.interpolateRequired), str(self.extrapolateFrames), str(self.extrapolateRequired))
+        self.outputPath = outputPath + "-%s-%s-%s-%s-%s" % (str(self.detectionDistance), str(self.interpolateFrames), str(self.interpolateRequired), str(self.extrapolateFrames), str(self.extrapolateRequired))
     
         os.makedirs(self.outputPath, exist_ok=True)
-        shutil.copy(os.path.join(self.datasetPath, "statistics.pkl"), self.outputPath)
 
     def run(self):
 
@@ -58,11 +52,6 @@ class Temporal():
 
         basefn = os.path.join(self.path, self.folder, self.filename)
         os.makedirs(os.path.join(self.outputPath, self.folder), exist_ok=True)
-        #shutil.copy(basefn + ".scans.pickle", os.path.join(self.outputPath, self.folder))
-        #try:
-        #    shutil.copy(basefn + ".3d.pickle", os.path.join(self.outputPath, self.folder))
-        #except:
-        #    pass
 
         with open(basefn + ".data.pickle", "rb") as f:
             self.data.update(pickle.load(f))
@@ -516,8 +505,7 @@ if __name__ == "__main__":
                                         continue
                                     if e >= d:
                                         continue
-                                    outputPath = "../data/temporal/temporal-%s-%s-%s-%s-%s" % (a, b, c, d, e)
-                                    print(outputPath)
+                                    outputPath = "../data/temporal/temporal"
 
                                     jobs.append(Temporal(path, folder, filename, queue, a, b, c, d, e, datasetPath, outputPath))
                                     #distance thresh, interp window, interp dets req, extrap window, extrap dets req

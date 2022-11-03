@@ -95,7 +95,9 @@ class Extractor():
         self.saveScans()
         self.queue.put(sentinel.SUCCESS)
         if len(self.scans) != 0:
-            self.queue.put("%s: Finished writing %i frames" % (self.filename, len(self.scans)))
+            self.queue.put("%s: Process complete, written %i frames" % (self.filename, len(self.scans)))
+        else:
+            self.queue.put("%s: Process complete" % (self.filename))
         return len(self.scans)
 
     def extractStaticTFs(self):
@@ -249,6 +251,7 @@ class Extractor():
 
         msgs = copy.deepcopy(self.topicBuf)
         msgs.append(msg)
+        #comb_msgs = [*self.topicBuf, msg]
 
         if not self.odometryMoved():
             return
@@ -293,19 +296,21 @@ class Extractor():
         mat[3][-1] = 1
 
         points = pc2.read_points(msg, skip_nans=True)
+        points = np.fromiter(points, dtype=np.dtype((float, 9)))
+        points = np.pad(points, [(0, 0), (0, 1)], mode="constant", constant_values=1) ##
+        points = np.apply_along_axis(self.transformPoint, 1, points, mat)
+        robotPoints = np.where(points[:, 0] == None)
+        points = np.delete(points, robotPoints, axis=0)
 
-        out = []
-        for point in points:
-            #x, y, z, intensity, t, reflectivity, ring, ambient, range
-            transPoint = [*point[:3], 1]
-            transPoint = np.matmul(mat, transPoint)
-            point = [*transPoint[:3], *point[3:]]
-            if (point[0]**2 + point[1]**2)**0.5 < 2.5:
-                continue
-            out.append(point)
-        out = np.array(out) 
+        return points
 
-        return out
+    def transformPoint(self, point, mat):
+        #p = np.append(point[:3], 1)# np.array([*point[:3], 1])
+        p = point[[0, 1, 2, -1]]
+        p = np.matmul(mat, p)
+        if (p[0]**2 + p[1]**2)**0.5 < 2.5:
+            return [None] * 9
+        return [*p[:3], *point[3:-1]]
 
 def listener(q, total):
     pbar = tqdm.tqdm(total=total)
@@ -349,7 +354,7 @@ if __name__ == "__main__":
     listenProcess = multiprocessing.Process(target=listener, args=(queue, len(jobs)))
     listenProcess.start()
 
-    workers = 4
+    workers = 7
     futures = []
     queue.put("Starting %i jobs with %i workers" % (len(jobs), workers))
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as ex:
