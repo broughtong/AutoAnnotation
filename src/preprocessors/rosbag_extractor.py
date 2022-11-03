@@ -37,7 +37,7 @@ class Extractor():
         self.lp = lg.LaserProjection()
 
         self.lastX, self.lastY = None, None
-        self.distThresh = 2
+        self.distThresh = 0.1
         self.fileCounter = 0
         self.position = None
         self.scans = []
@@ -354,7 +354,7 @@ if __name__ == "__main__":
     listenProcess = multiprocessing.Process(target=listener, args=(queue, len(jobs)))
     listenProcess.start()
 
-    workers = 7
+    workers = 2
     futures = []
     queue.put("Starting %i jobs with %i workers" % (len(jobs), workers))
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as ex:
