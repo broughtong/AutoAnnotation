@@ -1,8 +1,8 @@
 import rosbag
 import os
 
-datasetPath = "../../data/rosbags"
-outPath = "../../data/rosbags_filtered"
+datasetPath = "../../data/rosbags_raw"
+outPath = "../../data/rosbags"
 
 def filterBag(filename, newfolder, newfilename):
     print(filename, newfolder, newfilename)

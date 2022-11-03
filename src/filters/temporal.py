@@ -12,6 +12,8 @@ import numpy as np
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from scipy.spatial.transform import Rotation as R
 
+import AutoAnnotation.src.utils.sentinel as sentinel
+
 @contextmanager
 def suppress_stdout_stderr():
     with open(os.devnull, 'w') as fnull:
@@ -23,10 +25,10 @@ class Temporal():
 
         self.path = path
         self.folder = folder
-        self.filename = filename[:-12]
+        self.filename = filename
         self.queue = queue
         self.datasetPath = datasetPath
-        self.op = outputPath
+        self.outputPath = outputPath
 
         self.detectionDistance = detectionDistance
         self.interpolateFrames = interpolateFrames
@@ -35,37 +37,37 @@ class Temporal():
         self.extrapolateRequired = extrapolateRequired
         self.underRobotDistance = 1.8
         self.data = {}
-        self.outputPath = outputPath + "-%s-%s-%s-%s-%s" % (str(self.detectionDistance), str(self.interpolateFrames), str(self.interpolateRequired), str(self.extrapolateFrames), str(self.extrapolateRequired))
+        self.originalDetections = 0
+        self.newDetections = 0
     
-        os.makedirs(self.outputPath, exist_ok=True)
-
     def run(self):
 
-        self.queue.put("Process spawned for file %s" % (os.path.join(self.path, self.folder, self.filename)))
+        self.queue.put("%s: Process spawned" % (self.filename))
 
-        foldername = os.path.join(self.op, self.folder)
-        if os.path.isfile(os.path.join(foldername, self.filename + ".data.pickle")):
-            if os.path.getsize(os.path.join(foldername, self.filename + ".data.pickle")) > 0:
-                #print("Skipping, exists...")
-                #return
-                pass
-
-        basefn = os.path.join(self.path, self.folder, self.filename)
         os.makedirs(os.path.join(self.outputPath, self.folder), exist_ok=True)
 
-        with open(basefn + ".data.pickle", "rb") as f:
+        with open(os.path.join(self.path, "detector/default", self.folder, self.filename), "rb") as f:
+            self.data.update(pickle.load(f))
+        with open(os.path.join(self.path, "meta", self.folder, self.filename), "rb") as f:
             self.data.update(pickle.load(f))
 
+        self.data["eroded"] = [[]]
+
+        self.calculateNDetections()
         self.temporal()
         
         fn = os.path.join(self.outputPath, self.folder, self.filename + ".data.pickle")
+        self.queue.put(fn)
         with open(fn, "wb") as f:
             pickle.dump(self.data, f)
+        
+        self.calculateNDetections()
+
+        self.queue.put("%s: Process complete, n of detections %i -> %i" % (self.filename, self.originalDetections, self.newDetections))
 
     def temporal(self):
 
-
-        trans = self.data["trans"]
+        transform = self.data["transform"]
         ts = self.data["ts"]
         annotations = self.data["annotations"]
         annotationsOdom = []
@@ -75,7 +77,7 @@ class Temporal():
         #move everything into the odom frame
         for idx in range(len(annotations)):
             robopose = np.array([-4.2, 0, 0, 1])
-            mat = np.array(trans[idx])
+            mat = np.array(transform[idx])
             robopose = np.matmul(mat, robopose)[:2]
             robotPoses.append(robopose)
             r = R.from_matrix(mat[:3, :3])
@@ -152,11 +154,11 @@ class Temporal():
                         if dist > self.underRobotDistance: #stop detections from under the robot
                             lerped[carFrames[frameIdx]+i].append([x, y, r])
                             lerpedOnly[carFrames[frameIdx]+i].append([x, y, r])
-            self.queue.put(1)
+            self.queue.put(sentinel.SUCCESS)
             ctr += 1
         while ctr < len(annotations):
             ctr += 1
-            self.queue.put(1)
+            self.queue.put(sentinel.SUCCESS)
 
         #add real detections to lerped dataset
         for frameIdx in range(len(annotationsOdom)):
@@ -195,6 +197,10 @@ class Temporal():
                 if foundCar == True:
                     eroded[mainIdx].append(car)
 
+        cint = 0
+        for i in eroded:
+            cint += len(i)
+
         #some shitty nms due to interpolated windowing
         newEroded = []
         for mainIdx in range(len(annotations)):
@@ -212,7 +218,7 @@ class Temporal():
                     dy = car[1] - otherCar[1]
                     dist = ((dx**2) + (dy**2))**0.5
 
-                    if dist < self.detectionDistance:
+                    if dist < 0.4:
                         unique = False
 
                 if unique == True:
@@ -332,16 +338,28 @@ class Temporal():
                                     if dist > self.underRobotDistance: #stop detections from under the robot
                                         extrapolated[i].append(car)
                                         extrapolatedOnly[i].append(car)
-            self.queue.put(1)
+            self.queue.put(sentinel.SUCCESS)
             ctr += 1
         while ctr < len(annotations):
             ctr += 1
-            self.queue.put(1)
+            self.queue.put(sentinel.SUCCESS)
 
         #add real detections to extrapolated
         for frameIdx in range(len(annotationsOdom)):
             for detectionIdx in range(len(eroded[frameIdx])):
                 extrapolated[frameIdx].append(eroded[frameIdx][detectionIdx])
+
+        cl = 0
+        for i in lerped:
+            cl += len(i)
+        cer = 0
+        for i in eroded:
+            cer += len(i)
+        cex = 0
+        for i in extrapolated:
+            cex += len(i)
+            
+        self.queue.put(str(self.originalDetections) + "->" + str(cl) + "->" + str(cint) + "->" + str(cer) + "->" + str(cex))
 
         #some shitty nms due to one extrapolater going forward possibly overlapping one going backwards
         newExtrapolated = []
@@ -381,7 +399,7 @@ class Temporal():
 
         #move back to robot frame
         for idx in range(len(annotations)):
-            mat = np.array(trans[idx])
+            mat = np.array(transform[idx])
             mat = np.linalg.inv(mat)
             r = R.from_matrix(mat[:3, :3])
             yaw = r.as_euler('zxy', degrees=False)
@@ -454,77 +472,60 @@ class Temporal():
                 else:
                     b += math.pi
         return a + i * (b - a)
+    
+    def calculateNDetections(self):
+        for i in self.data["annotations"]:
+            self.originalDetections += len(i)
+        for i in self.data["eroded"]:
+            self.newDetections += len(i)
 
 def listener(q, total):
     pbar = tqdm.tqdm(total=total)
-    for item in iter(q.get, None):
-        if type(item) == int:
+    for item in iter(q.get, sentinel.EXIT):
+        if item == sentinel.SUCCESS or item == sentinel.PROBLEM:
             pbar.update()
         else:
             tqdm.tqdm.write(str(item))
 
 if __name__ == "__main__":
 
-    datasetPath = "../data/detector/"
+    dataPath = "../../data"
+    outputPath = "../../data/temporal/default"
 
     count = 0
-    with open(os.path.join(datasetPath, "statistics.pkl"), "rb") as f:
+    with open(os.path.join(dataPath, "meta", "statistics.pkl"), "rb") as f:
         data = pickle.load(f)
     for i in data:
         count += i[-1]
 
-    multi = 0
-    for a in [0.6]:
-        for b in range(20, 51, 20):
-            for c in range(5, 26, 10):
-                for d in range(10, 51, 20):
-                    for e in range(5, 26, 10):
-                        if c >= b:
-                            continue
-                        if e >= d:
-                            continue
-                        multi += 1
     manager = multiprocessing.Manager()
     queue = manager.Queue()
-    listenProcess = multiprocessing.Process(target=listener, args=(queue, count*multi))
+    listenProcess = multiprocessing.Process(target=listener, args=(queue, count*2))
     listenProcess.start()
 
     jobs = []
-    for files in os.walk(datasetPath):
+    for files in os.walk(os.path.join(dataPath, "detector/default")):
         for filename in files[2]:
-            if ".data.pickle" in filename:
-                path = datasetPath
-                folder = files[0][len(path):]
-                
-                for a in [0.6]:
-                    for b in range(20, 51, 10):
-                        for c in range(5, 26, 5):
-                            for d in range(10, 51, 10):
-                                for e in range(5, 26, 5):
-                                    if c >= b:
-                                        continue
-                                    if e >= d:
-                                        continue
-                                    outputPath = "../data/temporal/temporal"
+            path = dataPath
+            folder = files[0][len(os.path.join(path, "detector/default"))+1:]
+            jobs.append(Temporal(path, folder, filename, queue, 1.0, 20, 10, 20, 10, dataPath, outputPath))
+            #distance thresh, interp window, interp dets req, extrap window, extrap dets req
 
-                                    jobs.append(Temporal(path, folder, filename, queue, a, b, c, d, e, datasetPath, outputPath))
-                                    #distance thresh, interp window, interp dets req, extrap window, extrap dets req
-
-    workers = 16
+    #jobs = jobs[:1]
+    workers = 4
     futures = []
     queue.put("Starting %i jobs with %i workers" % (len(jobs), workers))
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as ex:
         for job in jobs:
             f = ex.submit(job.run)
             futures.append(f)
+            time.sleep(0.1)
 
         for future in futures:
             try:
-                pass
-                #queue.put(str(future.result()))
+                res = future.result()
             except Exception as e:
-                queue.put("P Exception: " + str(e))
+                queue.put("Process exception: " + str(e))
 
-    queue.put(None)
+    queue.put(sentinel.EXIT)
     listenProcess.join()
-    print("Finished :)")
