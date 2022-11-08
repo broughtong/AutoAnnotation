@@ -56,7 +56,7 @@ class Temporal():
         self.calculateNDetections()
         self.temporal()
         
-        fn = os.path.join(self.outputPath, self.folder, self.filename + ".data.pickle")
+        fn = os.path.join(self.outputPath, self.folder, self.filename)
         self.queue.put(fn)
         with open(fn, "wb") as f:
             pickle.dump(self.data, f)
