@@ -5,11 +5,16 @@ def getInAnnotation(scan, annotations):
     carPoints = []
     nonCarPoints = []
 
+    annotationVertices = []
+    for annotation in annotations:
+        vertices = getBoundaryPoints(annotation)
+        annotationVertices.append(vertices)
+    
     for point in scan:
 
         inAnnotation = False
 
-        for annotation in annotations:
+        for annotation in annotationVertices:
             if isInsideAnnotation(point[:2], annotation):
                 inAnnotation = True
                 break
@@ -21,9 +26,7 @@ def getInAnnotation(scan, annotations):
 
     return carPoints, nonCarPoints
 
-def isInsideAnnotation(pos, annotation):
-
-    poly = getBoundaryPoints(annotation)
+def isInsideAnnotation(pos, poly):
 
     counterPos = (9999, pos[1])
     intersects = 0
@@ -44,8 +47,8 @@ def getBoundaryPoints(poly):
     centreX = poly[0]#*scale) + (res//2)
     centreY = poly[1]#*scale) + (res//2)
     angle = poly[2] % (math.pi*2)
-    height = 4.85# * scale
-    width = 2.4# * scale
+    height = 2.5# * scale
+    width = 4.8# * scale
 
     alpha = math.cos(angle) * 0.5
     beta = math.sin(angle) * 0.5

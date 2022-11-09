@@ -508,7 +508,7 @@ if __name__ == "__main__":
         for filename in files[2]:
             path = dataPath
             folder = files[0][len(os.path.join(path, "detector/default"))+1:]
-            jobs.append(Temporal(path, folder, filename, queue, 1.0, 20, 10, 20, 10, dataPath, outputPath))
+            jobs.append(Temporal(path, folder, filename, queue, 1.0, 50, 10, 50, 10, dataPath, outputPath))
             #distance thresh, interp window, interp dets req, extrap window, extrap dets req
 
     #jobs = jobs[:1]

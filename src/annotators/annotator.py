@@ -41,6 +41,12 @@ class Annotator():
         self.labelData = {}
         self.annotators = []
         self.movementThreshold = movementThreshold
+    
+        #augmentations
+        self.flipV = False
+        self.rotations = [0, 1, 2, 3, 4, 5, 6]
+        self.rotations = [0]
+        self.saltPepperNoise = 0.001
 
         for method in methods:
             for key, value in self.labelSources.items():
@@ -101,7 +107,7 @@ class Annotator():
                     continue
 
                 #perform augmentations
-                for rotation in rotations:
+                for rotation in self.rotations:
                     if rotation == 0:
                         continue
                     r = np.identity(4)
@@ -115,7 +121,10 @@ class Annotator():
 
                     newScan = np.copy(combined[0])
                     for point in range(len(newScan)):
-                        newScan[point] = np.matmul(r, newScan[point])
+                        pPos, pAttrib = newScan[point][:3], newScan[point][3:]
+                        pPos = np.concatenate([pPos, [1]])
+                        pPos = np.matmul(r, pPos)
+                        newScan[point] = np.concatenate([pPos[:3], pAttrib])
                     combined.append(newScan)
 
                     newAnnotations = np.copy(annotations[0])
@@ -128,83 +137,34 @@ class Annotator():
                         newAnnotations[i] = [*v, o]
                     annotations.append(newAnnotations)
 
+                if self.flipV:
+                    for idx in range(len(combined)):
+                        v = random.random()
+                        if v > 0.5:
+                            fScan = np.copy(combined[idx])
+                            for point in range(len(fScan)):
+                                fScan[point][0] = -fScan[point][0]
+                            combined[idx] = fScan
+                            fAnnotations = np.copy(annotations[idx])
+                            for i in range(len(fAnnotations)):
+                                fAnnotations[i][0] = -fAnnotations[i][0]
+                                fAnnotations[i][2] = -fAnnotations[i][2]
+                            annotations[idx] = fAnnotations
+            
             for augIdx in range(len(combined)):
 
                 for annotator in self.annotators:
                     
-                    filename = self.filename + "-" + str(self.fileCounter)
+                    if len(combined) == 1:
+                        filename = self.filename + "-" + str(self.fileCounter)
+                    else:
+                        filename = self.filename + "-" + str(self.fileCounter) + "-" + str(augIdx)
                     data = combined[augIdx]
                     labels = annotations[augIdx]
                     annotator.annotate(filename, data, labels)
-                    self.fileCounter += 1
-                
+
+            self.fileCounter += 1
             self.queue.put(sentinel.SUCCESS)
-
-            continue
-            return
-            if self.filename in gtBags and 1==2:
-                fn = os.path.join(outputPath, scanField, "mask", "all", "imgs", self.filename + "-" + str(frame) + ".png")
-                draw.drawImgFromPoints(fn, newScan, [], [], [], [], dilation=3)
-                
-                fn = os.path.join(outputPath, scanField, "mask", "all", "annotations", self.filename + "-" + str(frame) + ".png")
-                carPoints, nonCarPoints = geometry.getInAnnotation(newScan, newAnnotations)
-                badAnnotation = draw.drawAnnotation(fn, frame, newAnnotations)
-
-                fn = os.path.join(outputPath, scanField, "mask", "all", "debug", self.filename + "-" + str(frame) + ".png")
-                draw.drawImgFromPoints(fn, newScan, [], [], newAnnotations, [], dilation=None)
-
-                fn = os.path.join(outputPath, scanField, "pointcloud", "all", "cloud", self.filename + "-" + str(frame) + ".")
-                self.saveCloud(fn, newScan)
-                fn = os.path.join(outputPath, scanField, "pointcloud", "all", "annotations", self.filename + "-" + str(frame) + ".")
-                self.saveAnnotations(fn, newScan, newAnnotations)
-
-            #raw
-            if self.filename not in gtBags and len(newAnnotations):
-
-                for method in self.annotators:
-                    filename = self.filename + "-" + str(frame) + "-" + '{0:.2f}'.format(rotation)
-
-                    method.annotate(filename, combined, newAnnotations, scanField)
-
-                fn = os.path.join(outputPath, scanField, "mask", "all", "imgs", self.filename + "-" + str(frame) + "-" + '{0:.2f}'.format(rotation) + ".png")
-                draw.drawImgFromPoints(fn, newScan, [], [], [], [], dilation=5)
-                
-                fn = os.path.join(outputPath, scanField, "mask", "all", "annotations", self.filename + "-" + str(frame) + "-" + '{0:.2f}'.format(rotation) + ".png")
-                carPoints, nonCarPoints = geometry.getInAnnotation(newScan, newAnnotations)
-                badAnnotation = self.drawAnnotation(fn, frame, newAnnotations)
-
-                fn = os.path.join(outputPath, scanField, "mask", "all", "debug", self.filename + "-" + str(frame) + "-" + '{0:.2f}'.format(rotation) + ".png")
-                draw.drawImgFromPoints(fn, newScan, [], [], newAnnotations, [], dilation=None)
-
-                fn = os.path.join(outputPath, scanField, "pointcloud", "all", "cloud", self.filename + "-" + str(frame) + "-" + '{0:.2f}'.format(rotation) + ".")
-                #self.saveCloud(fn, newScan)
-                fn = os.path.join(outputPath, scanField, "pointcloud", "all", "annotations", self.filename + "-" + str(frame) + "-" + '{0:.2f}'.format(rotation) + ".ply")
-                #self.saveAnnotations(fn, newScan, newAnnotations, cloud)
-
-            if flipV and len(newAnnotations) and self.filename not in gtBags :
-
-                fScan = np.copy(newScan)
-                for point in range(len(newScan)):
-                    fScan[point][0] = -fScan[point][0]
-                fAnnotations = np.copy(newAnnotations)
-                for i in range(len(annotations)):
-                    fAnnotations[i][0] = -fAnnotations[i][0]
-                    fAnnotations[i][2] = -fAnnotations[i][2]
-
-                fn = os.path.join(outputPath, scanField, "mask", "all", "imgs", self.filename + "-" + str(frame) + "-" + '{0:.2f}'.format(rotation) + "-V.png")
-                draw.drawImgFromPoints(fn, fScan, [], [], [], [], dilation=3)
-                
-                fn = os.path.join(outputPath, scanField, "mask", "all", "annotations", self.filename + "-" + str(frame) + "-" + '{0:.2f}'.format(rotation) + "-V.png")
-                carPoints, nonCarPoints = geometry.getInAnnotation(fScan, fAnnotations)
-                badAnnotation = self.drawAnnotation(fn, frame, fAnnotations) 
-
-                fn = os.path.join(outputPath, scanField, "mask", "all", "debug", self.filename + "-" + str(frame) + "-" + '{0:.2f}'.format(rotation) + "-V.png")
-                draw.drawImgFromPoints(fn, fScan, [], [], fAnnotations, [], dilation=None)
-
-                fn = os.path.join(outputPath, scanField, "pointcloud", "all", "cloud", self.filename + "-" + str(frame) + "-" + '{0:.2f}'.format(rotation) + "-V.")
-                self.saveCloud(fn, newScan)
-                fn = os.path.join(outputPath, scanField, "pointcloud", "all", "annotations", self.filename + "-" + str(frame) + "-" + '{0:.2f}'.format(rotation) + "-V.")
-                #self.saveAnnotations(fn, newScan, newAnnotations)
 
 def listener(q, total):
     pbar = tqdm.tqdm(total=total)
@@ -216,26 +176,27 @@ def listener(q, total):
 
 if __name__ == "__main__":
 
-    methods = [maskrcnn]#, pointcloud]
+    methods = [maskrcnn, pointcloud]
     datasetPath = "../../data"
     outputPath = "../../annotations"
-    scanFields = ["scans"]
+    scanFields = ["pointclouds", "scans"]
     labelSources = {"temporal/default": "extrapolated"}
     movementThreshold = 0.5
     gtPath = "../../data/gt"
     gtBags = []
 
-    #augmentations
-    flipV = True
-    rotations = [0, 1, 2, 3, 4, 5, 6]
-    rotations = [0, 1]
-    saltPepperNoise = 0.001
-
+    #calculate the total number of training samples
     count = 0
     with open(os.path.join(datasetPath, "meta", "statistics.pkl"), "rb") as f:
         data = pickle.load(f)
     for i in data:
         count += i[-1]
+    count *= len(methods)
+    count *= len(scanFields)
+    ctr = 0
+    for key in labelSources.items():
+        ctr += 1
+    count *= ctr
 
     manager = multiprocessing.Manager()
     queue = manager.Queue()
@@ -258,8 +219,8 @@ if __name__ == "__main__":
                 folder = files[0][len(path)+len(scanField)+2:]
                 jobs.append(Annotator(path, folder, filename, queue, scanField, labelSources, methods, outputPath, movementThreshold))
 
-    #jobs = jobs[:1]
-    workers = 8
+    jobs = jobs[:1]
+    workers = 1
     futures = []
     queue.put("Starting %i jobs with %i workers" % (len(jobs), workers))
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as ex:

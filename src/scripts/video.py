@@ -1,8 +1,8 @@
 import os
 import subprocess
 
-frameRate = 10
-path = "../visualisation/detector"
+frameRate = 20
+path = "../../visualisation/pc"
 outPath = "../detectorVideos"
 os.makedirs(os.path.join(path, outPath), exist_ok=True)
 

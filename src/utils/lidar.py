@@ -1,12 +1,16 @@
 import numpy as np
 
-def combineScans(arrOfScans):
+def combineScans(scans):
+    
+    if type(scans) == dict:
+        combinedScans = []
+        for key in scans.keys():
+            scans[key] = np.array(scans[key])
+            scans[key] = scans[key].reshape([scans[key].shape[0], 4])
+            combinedScans.append(scans[key])
 
-    scans = []
-    for key in arrOfScans.keys():
-        arrOfScans[key] = np.array(arrOfScans[key])
-        arrOfScans[key] = arrOfScans[key].reshape([arrOfScans[key].shape[0], 4])
-        scans.append(arrOfScans[key])
+        return np.concatenate(combinedScans)
 
-    return np.concatenate(scans)
+    if type(scans) == np.ndarray:
+        return scans
 

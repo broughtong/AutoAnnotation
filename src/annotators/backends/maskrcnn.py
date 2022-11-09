@@ -96,8 +96,6 @@ class AnnotatorBackend():
                 return True
         return False
 
-
-
     def drawCar(self, centreX, centreY, fullHeight, fullWidth, angle, img, debugimg=None, annotationIdx=None):
 
         angle = angle % (math.pi * 2)
