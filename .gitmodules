@@ -1,0 +1,3 @@
+[submodule "src/filters/multi-object-tracker"]
+	path = src/filters/multi-object-tracker
+	url = https://github.com/adipandas/multi-object-tracker.git

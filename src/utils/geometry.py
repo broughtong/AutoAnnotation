@@ -49,6 +49,9 @@ def getBoundaryPoints(poly):
     angle = poly[2] % (math.pi*2)
     height = 2.5# * scale
     width = 4.8# * scale
+    inflation = 0.3
+    height += inflation
+    width += inflation
 
     alpha = math.cos(angle) * 0.5
     beta = math.sin(angle) * 0.5

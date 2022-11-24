@@ -71,6 +71,8 @@ class Annotator():
 
             for i in self.annotators:
                 self.annotate(key, value)
+        
+        self.queue.put("%s: Process complete" % (self.filename))
 
     def annotate(self, annotationType, annotationField):
 
@@ -219,8 +221,7 @@ if __name__ == "__main__":
                 folder = files[0][len(path)+len(scanField)+2:]
                 jobs.append(Annotator(path, folder, filename, queue, scanField, labelSources, methods, outputPath, movementThreshold))
 
-    jobs = jobs[:1]
-    workers = 1
+    workers = 3
     futures = []
     queue.put("Starting %i jobs with %i workers" % (len(jobs), workers))
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as ex:
